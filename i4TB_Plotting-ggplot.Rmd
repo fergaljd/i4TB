@@ -54,7 +54,7 @@ Next, we want to input our datasets. We're importing the data as a `.csv` file (
 
 ```{r}
 # Importing from CSV
-data = read_csv('DataToPlot1.csv')
+data = read_csv('https://raw.githubusercontent.com/fergaljd/i4TB/main/DataToPlot1.csv')
 
 View(data)
 ```
