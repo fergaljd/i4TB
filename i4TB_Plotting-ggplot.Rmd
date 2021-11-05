@@ -1,0 +1,190 @@
+---
+title: "i4TB Didadic session: Plotting with ggplot"
+output: html_notebook
+---
+
+This notebook will cover plotting techniques using the R library `ggplot2`. We will prioritize plots that are hard to generate in excel. The code provided here is designed to facilitate customization for new datasets.
+
+For more information on the tools mentioned, please consult these references:
+
+#### General references ####
+[ggplot homepage](https://ggplot2.tidyverse.org/)
+
+[ggplot cheatsheet](https://rstudio.com/wp-content/uploads/2015/03/ggplot2-cheatsheet.pdf)
+
+[ggplot essentials](http://www.sthda.com/english/wiki/ggplot2-essentials)
+
+[R cookbook reference](http://www.cookbook-r.com/Graphs/)
+
+[R Graph Gallery](https://www.r-graph-gallery.com/ggplot2-package.html)
+
+#### References on modifications ####
+[Shapes](http://sape.inf.usi.ch/quick-reference/ggplot2/shape)
+
+[Picking colors](https://colorbrewer2.org/#type=sequential&scheme=BuGn&n=3)
+
+[Using math symbols](https://www.calvin.edu/~rpruim/courses/s341/S17/from-class/MathinRmd.html)
+
+[More on using math symbols](http://csrgxtu.github.io/2015/03/20/Writing-Mathematic-Fomulars-in-Markdown/)
+
+
+
+
+# 1. Installing and loading packages
+First, we will need to load the necessary packages for this session. If there are any packages that need to be installed, use the install scripts once. *Note:* If you already have these installed, no need to run this again.
+```{r}
+# Code for installation only. Execute this only once.
+install.packages('ggplot2')
+install.packages('ggExtra')
+install.packages('RColorBrewer')
+install.packages('Rmisc')
+install.packages('tidyverse')
+
+# Loading the packages
+library(ggplot2)
+library(ggExtra)
+library(RColorBrewer)
+library(Rmisc)
+library(tidyverse)
+```
+
+# 2. Loading a dataset
+
+Next, we want to input our datasets. We're importing the data as a `.csv` file (which can be generated from Excel). 
+
+```{r}
+# Importing from CSV
+data = read_csv('DataToPlot1.csv')
+
+View(data)
+```
+
+For the purposes of this first set of plot, we'll want to focus on an individual gene: TBCD.
+
+```{r}
+# Filtering by the gene TBCD
+DataToPlot = filter(data, GeneID == "TBCD")
+View(DataToPlot)
+```
+
+The data frame `DataToPlot` is in a format that is compatible with `ggplot`. 
+# 3. Box plot
+
+
+Here's the basic command to generate a box plot from the data in `DataToPlot`.
+
+```{r}
+# Basic Box Plot
+ggplot(data = DataToPlot, aes(x=TB, y=Expression)) + 
+  geom_boxplot() # Setting plot type to be boxplot
+```
+We can add all sorts of customizations to this plot to make it look prettier:
+
+```{r}
+# Box Plot with Aesthetic Customizations
+ggplot(data = DataToPlot, aes(x = TB, y=Expression, fill = TB)) + 
+  geom_boxplot() + # Setting plot type to be boxplot
+  xlab('Infection Type') + # x label
+  ylab('Expression [counts]') + # y label
+  ggtitle('TBCD Expression') + # title
+  scale_fill_brewer(name="Infection\nType", palette = 'Set1') + # setting different color schemes and customizing legend title
+  theme_bw() + # changing background color 
+  theme(plot.title=element_text(hjust=0.5)) # adjust title position
+```
+
+# 4. Layering multiple graph types
+
+You can layer multiple graph types onto the same plot
+
+```{r}
+# Box Plot + Jitter Plot
+ggplot(data = DataToPlot, aes(x=TB, y=Expression)) + 
+  geom_boxplot(outlier.shape = NA, outlier.size = 0) + # Setting plot type to be boxplot, and removing outlier points
+  geom_jitter(height=0, width=0.2, aes(color=TB)) + # Layering on a jitter plot of the individual replicates
+  scale_color_brewer(name="Infection\nType", palette = 'Dark2') + # setting different color schemes and customizing legend title
+  xlab('Infection Type') + # x label
+  theme_bw() # changing background color
+```
+
+# 5. Faceting
+
+If you want to generate a group of related plots, each of which plotting a subset of the data (based on a specific grouping), you can do this easily using faceting.
+
+In this example, we're generating a family of faceted plots, each of which plots the expression of for a different patient.
+
+```{r}
+# Jitter Plot with Faceting
+ggplot(data = DataToPlot, aes(x=TB, y=Expression)) + 
+  geom_jitter(aes(color = TB)) + # Setting plot type to be boxplot
+  facet_grid(. ~ ptID,labeller = label_both) + # creating facets
+  scale_color_discrete(name="Infection\nType") + # customizing legend title
+  ggtitle('TBCD Expression') + # title
+  theme_bw() + # changing background color
+  theme(plot.title=element_text(hjust=0.5)) # adjust title position
+```
+
+# 6. Plotting distributions
+
+Distributions can be represented as histograms and density plots:
+
+```{r}
+# Basic Histograms and Density Plots
+ggplot(data = DataToPlot, aes(x=Expression)) + 
+  geom_histogram(binwidth=.2) + # Setting plot type to be historgram
+  geom_density() + # Setting plot type to be density plot
+  xlab('TBCD Expression') +
+  ylab('Frequency')
+```
+
+Can also plot by group:
+
+```{r}
+# Histograms colored by group
+ggplot(data = DataToPlot, aes(x=Expression,fill = TB)) + 
+  geom_histogram(binwidth=.2, position="dodge") + # Setting plot type to be histogram with interleaved bars
+  xlab('TBCD Expression') +
+  ylab('Frequency')
+```
+
+```{r}
+# Density plots colored by group
+ggplot(data = DataToPlot, aes(x=Expression,fill = TB)) + 
+  geom_density(alpha=.5) + # Setting plot type to be density plot
+  xlab('TBCD Expression') +
+  ylab('Frequency')
+```
+
+
+# 7. Bonus: Adding marginal histograms to scatter plots.
+
+You can also plot disributions in 2 dimensions. 
+
+To demonstrate this, we'll first construct a different data frame, which has the expression values of TBCD and NOC2L in 2 separate columns.
+
+The `filter` function extracts only the rows with the genes of interest, and the `pivot_wider` function reshapes the data frame to have expression of the two genes represented in separate columns.
+
+```{r}
+# Creating a data frame of sample gene expression with gene TBCD and NOC2L represented in separate columns.
+DataToPlot2 = pivot_wider(data, names_from = GeneID, values_from = Expression) 
+View(DataToPlot2)
+```
+
+
+Now to generate an x/y scatter plot of these two genes. Importantly, you need to save the `ggplot` function output to a variable.
+
+```{r}
+# Scatter Plot
+p = ggplot(data = DataToPlot2, aes(x=TBCD, y=NOC2L)) + 
+  geom_point(aes(color = TB)) + # Setting plot type to be scatter plot
+  scale_color_discrete(name="Infection\nType") # setting legend label
+p # Showing the plot
+```
+
+We can add to this marginal plot visualizations of the distributions of each individual gene to the scatter plot:
+
+```{r}
+# Adding a marginal plot
+p1 = ggMarginal(p, type="density", groupColour = TRUE, groupFill = TRUE) # adding marginal density plots
+p1 # showing the plot
+```
+
