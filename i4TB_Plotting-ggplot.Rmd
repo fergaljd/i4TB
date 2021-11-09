@@ -39,7 +39,10 @@ install.packages('ggExtra')
 install.packages('RColorBrewer')
 install.packages('Rmisc')
 install.packages('tidyverse')
+```
 
+Now for loading the packages:
+```{r}
 # Loading the packages
 library(ggplot2)
 library(ggExtra)
