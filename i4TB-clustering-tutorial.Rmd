@@ -1,0 +1,313 @@
+---
+title: "Intro to clustering and dimensionality reduction"
+author: "Fergal Duffy"
+date: "4/26/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include=TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r}
+library("ggplot2")
+library("tidyverse")
+library("ggrepel")
+library("umap")
+library("pheatmap")
+library("GEOquery")
+```
+
+## Sample Dataset
+
+We will get our data from NCBI GEO: a microarray dataset of whole blood transcriptome profiles from
+active TB patients and healthy controls from the paper
+
+> Berry MP, Graham CM, McNab FW, Xu Z et al. An interferon-inducible neutrophil-driven blood transcriptional signature in human tuberculosis. Nature 2010 Aug 19;466(7309):973-7. PMID: 20725040
+
+The R GEOquery package lets us automate this. We download the dataset from GEO and save it to a folder.This consists of normalized
+microarray gene intensity data. Here, we set negative expression values to 1, log transform, and
+pick the 100 most variable genes, using coefficient of variation.
+
+Then, we create a new data frame with 100 columns of gene expression, a sample ID column, and
+a Status column, indicating TB or Control. This also involves converting the microarray probe IDs
+to more interpretable gene names.
+
+The `expr` function pulls out gene expression,
+the `pData` function pulls out sample metadata (phenotype data) and the `fData` function maps 
+illumina microarray probe IDs to gene names and descriptiptions (feature data).
+
+
+
+
+```{r cache=T}
+
+#TB vs healthy control microarray data
+
+gse19435 <- getGEO("GSE19435", destdir = "./data/")
+
+#Lets create an annotated expression matrix, with rows in samples and variables in columns
+#To speed the analysis, we will limit ourselves to the top 100 most variable genes
+gse19435exprMat <- exprs(gse19435[[1]]) + abs(min(exprs(gse19435[[1]]))) + 1
+
+
+nGenesToPick <- 100
+mostVariableGenes <- names(sort(apply(gse19435exprMat, 1, function(x)sd(x)/mean(x)), decreasing =TRUE)[1:nGenesToPick])
+
+tbVsControlExprMat <- gse19435exprMat[mostVariableGenes,] %>% 
+  data.frame() %>% 
+  rownames_to_column("ILMN_ID") %>%
+  left_join(select(fData(gse19435[[1]]), ILMN_ID=ID, Gene=ILMN_Gene)) %>%
+  mutate(Gene=make.unique(Gene)) %>%
+  select(-ILMN_ID) %>%
+  pivot_longer(-Gene, names_to="SampleID", values_to="expr") %>%
+  mutate(expr=ifelse(expr<=1, 0, log2(expr))) %>%
+  pivot_wider(names_from=Gene, values_from=expr) %>%
+  left_join(select(pData(gse19435[[1]]), SampleID="geo_accession", Status="illness:ch1"))
+
+```
+
+
+## Dimensionality reduction
+
+Large omics datasets are often high-dimensional, measuring tens of thousands of genes/proteins/cells. It's not practical to
+visualize all of these measurements simultaneously. However, biology makes use of coherent response pathways. For example, many genes are expressed in a correlated fashion in response to a stimulus.
+
+Dimensionality reduction is a set of techniques that aim to collapse down high-dimensional measurements into a lower dimensional representation that captures the important biological variability of interest. 
+
+For a concrete example, let's take a look at principle component analysis (**PCA**)
+
+#### PCA
+PCA performs a linear transformation on a set of possibly correlated variables to produce a new set of uncorrelated variables. PCA will always create the first principle component to account for as much variability as possible, the second 
+principle component to account for as much of the remaining variability as possible, and so on until all variability has been captured.
+
+Let's explore PCA with a simple example of 2 genes from the TB microarray dataset. **GBP5** and **OAS3** are both interferon-induced genes that are increased in active TB. Plotting their expression reveals that their expression is tightly correlated in this dataset.
+
+
+```{r}
+
+twoGeneCor <- cor.test(~GBP5+OAS3, data=tbVsControlExprMat)
+
+ggplot(tbVsControlExprMat, aes(x=GBP5, y=OAS3, colour=Status)) +
+    stat_smooth(method="lm", se=F, colour="blue") +
+  geom_point() +
+  theme_bw() +
+  annotate("text", x=Inf, y=-Inf, vjust=-1, hjust=1, size=8, colour="blue",
+           label=sprintf('r==%.2f', twoGeneCor$estimate), parse=T) 
+
+```
+
+PCA linearly transformed the data to create new linear combinations of the original GBP5 and OAS3 expression,
+that are uncorrelated. 
+
+The `prcomp` function calculates the PCA transform, and the returned PCA object keeps the transformed data in the `x` slot.
+
+We can also calculate the variance explained by each PC, as a fraction of the total variance. 
+Remember, variance = stdev^2
+
+
+```{r}
+twoGenePCA <- prcomp(tbVsControlExprMat[c("GBP5", "OAS3")])
+
+twoGenePCAdf <- twoGenePCA$x %>%
+  data.frame(Status=tbVsControlExprMat$Status)
+
+twoGeneVarianceExplained <- ((twoGenePCA$sdev^2) / sum(twoGenePCA$sdev^2)) %>%
+  set_names(sprintf("PC%d", 1:length(.)))
+
+```
+Here we see that PC1 explains about `r signif(twoGeneVarianceExplained["PC1"]*100, 2)`% of the variance in our two genes
+
+```{r}
+
+ggplot(twoGenePCAdf, aes(x=PC1, y=PC2, colour=Status)) +
+  geom_point() +
+  theme_bw() +
+  labs(title="PCA transformed GBP5/OAS3",
+       x=sprintf("PC1 (%.2f%%)", twoGeneVarianceExplained["PC1"]*100),
+       y=sprintf("PC2 (%.2f%%)", twoGeneVarianceExplained["PC2"]*100))
+```
+
+Now, what happens if we PCA transform all the genes?
+
+
+```{r}
+tbVsControlPCA <- prcomp(select(tbVsControlExprMat, -Status, -SampleID))
+
+tbVsControlPCAdf <- tbVsControlPCA$x %>%
+  data.frame() %>%
+  mutate(SampleID=tbVsControlExprMat$SampleID,
+         Status=tbVsControlExprMat$Status)
+
+tbVsControlVarianceExplained <- ((tbVsControlPCA$sdev^2) / sum(tbVsControlPCA$sdev^2)) %>%
+  set_names(sprintf("PC%d", 1:length(.)))
+```
+
+When we plot the first two PCs, we can see that we have summarized `r signif(tbVsControlVarianceExplained["PC1"]*100, 2)`% + `r signif(tbVsControlVarianceExplained["PC2"]*100, 2)`% = `r signif(sum(tbVsControlVarianceExplained[1:2])*100, 2)`%  of the variance in our 100
+gene dataset in just two PCs
+
+We also see good seperation between control and PTB samples, which implies that a large proportion of the variation in the dataset is driven by TB infection
+
+```{r}
+ggplot(tbVsControlPCAdf, aes(x=PC1, y=PC2, colour=Status)) +
+  geom_point() +
+  theme_bw() +
+  labs(title="PCA transformed HP and Displacement",
+       x=sprintf("PC1 (%.2f%%)", tbVsControlVarianceExplained["PC1"]*100),
+       y=sprintf("PC2 (%.2f%%)", tbVsControlVarianceExplained["PC2"]*100))
+
+
+```
+
+#### UMAP
+
+PCA linearly transforms your data to a set of independent 'principle components'
+
+Another approach to visualizing your data is approaches such as t-SNE and UMAP. UMAP and t-SNE
+flatten out variation in your data to 2 (or more) dimensions, putting points 'close' together in high-dimensional
+space close together in 2D space.
+
+Lets apply UMAP to our TB dataset, using the `umap` function from the `umap` package
+
+```{r}
+
+tbVsControlUmap <- umap(select(tbVsControlExprMat, -Status, -SampleID))
+
+tbVsControlUmapDF <- data.frame(tbVsControlUmap$layout) %>%
+  mutate(Status=tbVsControlExprMat$Status)
+
+ggplot(tbVsControlUmapDF, aes(x=X1, y=X2, colour=Status)) +
+  geom_point() +
+  theme_bw() +
+  labs(title="UMAP transformed mtcars",
+       x="UMAP_1",
+       y="UMAP_2")
+
+
+```
+
+A note of caution: UMAP is a stochastic algorithm, and it is useful to get a sense of natural clusters in your data, but it cannot be interpreted in a quantitative way.
+
+## Unsupervised clustering
+
+Unsupervised clustering tries to find natural groupings or clusters in your data. "Unsupervised" means that
+you are not supplying meaningful labels with your data, clustering is done purely on your data values.
+
+In contrast, supervised approaches
+
+#### K-means
+
+K-means clustering breaks your data into 'k' distinct clusters (you choose 'k'). It works
+by initially randomly assigning each data point (i.e. row of your data matrix) to a cluster. THen it calculates
+a center point ('centroid') for each cluster and re-assigns your data to the cluster with the closest centroid.
+This process is carried out repeatedly until the cluster assignments stabilise.
+
+Since you have to specify 'k' up front, it's a good idea to try a few different values for 'k' and test which gives you the best clustering.
+
+Here, we know there are two 'groups' (TB / Control) so we can just use that
+
+We see that all of one cluster is TB samples, while the other cluster is a mix of TB and controls
+
+```{r}
+
+
+kmeansClustering <- kmeans(select(tbVsControlPCAdf, -SampleID, -Status), centers=2, nstart=10, iter.max=100)
+kmeansClusterDF <- data.frame(k=factor(kmeansClustering$cluster)) %>%
+  mutate(SampleID=tbVsControlExprMat$SampleID)
+#Now, lets visualize the clusters on the PCA
+
+tbVsControlClustPCADF <- tbVsControlPCAdf %>%
+  left_join(kmeansClusterDF, by="SampleID")
+
+tbVsControlClustCenters <- data.frame(kmeansClustering$centers) %>%
+  mutate(k=1:2)
+
+table(tbVsControlClustPCADF$Status, tbVsControlClustPCADF$k)
+
+ggplot(tbVsControlClustPCADF, aes(x=PC1, y=PC2)) +
+  geom_point(aes(colour=k, shape=Status), size=2) +
+  geom_point(data=tbVsControlClustCenters, size=5, shape=1, aes(colour=factor(k))) + 
+  theme_bw() +
+  scale_shape_manual(values=c(20, 3)) +
+  labs(title="K-means clustering",
+       x=sprintf("PC1 (%.2f%%)", tbVsControlVarianceExplained["PC1"]*100),
+       y=sprintf("PC2 (%.2f%%)", tbVsControlVarianceExplained["PC2"]*100),
+       caption="Cluster centers shown as empty circles")
+
+```
+
+#### Heatmaps and hierarchical clustering
+
+The `pheatmap` package is a simple way to create hierarchically clustered heatmaps. And we can annotate it with our
+kmeans clustering. Here we center and scale the column values, so that the heatmap columns have the same mean variance
+
+`pheatmap` uses the R `hclust` function to create hierarchical clustering of columns and rows. 
+
+The default hierarchical clustering approach, 'complete linkage' applies a similarity measurement (default: euclidian distance) between each row/column and links the most similar row/column. This is repeated until all rows/columns are linked. When calculating distances between marged clusters, the maximum distance between any two elements of the merged clusters is used.
+
+Clusterings can be visualized by the dendrogram, where the height of the branches corresponds to the 'distance' between clusters.
+
+```{r fig.width=12}
+tbVsControlExprHmap <- tbVsControlExprMat %>%
+  select(-Status) %>%
+  column_to_rownames("SampleID")
+
+tbVsControlHmapAnnot <- select(tbVsControlExprMat, Status, SampleID) %>%
+  column_to_rownames("SampleID")
+
+pheatmap(tbVsControlExprHmap, 
+         annotation_row = tbVsControlHmapAnnot,
+         clustering_method="complete",
+         scale="column",
+         main='Hierarchical clustering using complete linkage',
+         border_color = NA,
+         fontsize_col = 6, fontsize_row=6) 
+
+```
+
+However, complete linkage is not the only approach: for example Ward's method, instead of linking by maximum distance, it joins clusters based on the minimum between cluster distance. 
+
+```{r fig.width=12}
+
+pheatmap(tbVsControlExprHmap, 
+         annotation_row = tbVsControlHmapAnnot,
+         clustering_method="ward.D2",
+         scale="column",
+         main='Hierarchical clustering using ward linkage',
+         border_color = NA,
+         fontsize_col = 6, fontsize_row=6) 
+
+```
+
+Or we can cluster on the average between-cluster distance
+
+```{r fig.width=12}
+pheatmap(tbVsControlExprHmap, 
+         annotation_row = tbVsControlHmapAnnot,
+         clustering_method="average",
+         scale="column",
+         main='Hierarchical clustering using average linkage',
+         border_color = NA,
+         fontsize_col = 6, fontsize_row=6) 
+
+```
+
+We can also manually calculate the hierarchical clustering using the `dist` and `hclust` functions,
+and plot the clustering as a dendrogram. `dist` calculates a distance matrix (default: euclidean distance) between
+rows of the expression matrix, and `hclust` determines the hierarchical clustering.
+
+```{r fig.width=12}
+rowClustering <- hclust(dist(tbVsControlExprHmap), method="ward.D2")
+
+pheatmap(tbVsControlExprHmap, 
+         annotation_row = tbVsControlHmapAnnot,
+         clustering_method="average",
+         cluster_rows = rowClustering,
+         scale="column",
+         main='Hierarchical clustering using manual row clustering',
+         border_color = NA,
+         fontsize_col = 6, fontsize_row=6) 
+
+plot(rowClustering, labels=tbVsControlHmapAnnot$Status)
+
+```
